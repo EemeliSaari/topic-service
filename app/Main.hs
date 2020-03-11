@@ -1,12 +1,12 @@
 module Main where
 
-import Topics.LDA as LDA
+import Topics.Lda as Lda
+import Topics.Vocab
+import Topics.Sampling
 
-import Data.Map (fromList)
 
 main :: IO ()
 main = do
-    let specs = LDA.LDASpec {topic_n = 2, alpha = 0.1, eta = 0.5, decay = 0.1, iter = 10}
     let corpus = ["eat turkey on turkey day holiday",
                   "i like to eat cake on holiday",
                   "turkey trot race on thanksgiving holiday",
@@ -15,6 +15,18 @@ main = do
                   "movie on thanksgiving",
                   "movie at air and space museum is cool movie",
                   "aspiring movie star"]
-    let docs = map words corpus
-    let vocab = fromList [(y, x) |(x, y) <- zip [0..] (concat docs)]
-    print vocab
+
+    let tokens = map words corpus --Should come pre-tokenized
+    let vocab = buildVocab tokens
+    let docs = prepareTokens vocab tokens
+
+    let specs = Lda.LdaSpec { ntopics = 2
+                            , alpha = 0.1
+                            , eta = 0.5
+                            , decay = 0.1
+                            , iter = 10
+                            , nterms = numTerms vocab
+                            }
+
+    let model = Lda.initLda specs
+    print model
