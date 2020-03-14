@@ -1,4 +1,5 @@
 module Main where
+import Control.Monad.State
 
 import Topics.Lda as Lda
 import Topics.Vocab
@@ -25,8 +26,9 @@ main = do
                             , eta = 0.5
                             , decay = 0.1
                             , iter = 10
+                            , passes = 5
                             , nterms = numTerms vocab
                             }
 
-    let model = Lda.initLda specs
-    print model
+    let model = Lda.initLda specs in do
+        print (evalState (Lda.update docs 0) model)
