@@ -1,9 +1,9 @@
-module Topics.SHDP
-( SHDPSpec
+module Topics.SHdp
+( SHdpSpec
 ,
 ) where
 
-data SHDPSpec = SHDPSpec 
+data SHdpSpec = SHdpSpec 
     { k :: Integer
     , dimension :: Integer
     , alpha :: Float

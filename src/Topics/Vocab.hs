@@ -8,16 +8,16 @@ module Topics.Vocab
 
 import qualified Data.Map as Map
 import qualified Data.Set as Set
-    
 
-fromJust :: Maybe a -> a
-fromJust Nothing = error "KeyError"
-fromJust (Just x) = x
 
 data Vocab = Vocab 
     { _size :: Int
     , _table :: (Map.Map String Integer)
     } deriving (Show)
+
+fromJust :: Maybe a -> a
+fromJust Nothing = error "KeyError"
+fromJust (Just x) = x
 
 buildVocab :: [[String]] -> Vocab
 buildVocab d = Vocab{_size = (length uniq), _table = Map.fromList [(y, x) |(x, y) <- zip [0..] uniq]}

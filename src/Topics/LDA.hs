@@ -5,10 +5,10 @@ module Topics.Lda
 , Lda
 ) where
 
-import System.Random
+import Stats.Psi
 import Control.Monad.State
 import Data.Matrix as M
-import Data.Vector as V hiding (update, sum, foldl, length)
+import Data.Vector as V hiding (update, sum, foldl, length, map)
 
 
 data LdaSpec = LdaSpec 
@@ -19,14 +19,19 @@ data LdaSpec = LdaSpec
     , iter :: Int
     , passes :: Int
     , nterms :: Int
+    , offset :: Double
     } deriving (Show, Read)
 
 data LdaState = LdaState
     { _eta :: Vector Double
     , _alpha :: Vector Double
     , _sstate :: Matrix Double
+    , _expElogBeta :: Matrix Double
     , _ndocs :: Int
     , _pass :: Int
+    , _offset :: Double
+    , _decay :: Double
+    , _nupdate :: Int
     } deriving (Show)
 
 data Lda = Lda
@@ -36,7 +41,7 @@ data Lda = Lda
 
 -- Show only the State
 instance Show Lda where
-    show (Lda a b) = show b
+    show (Lda _ b) = show b
 
 type LdaMonad = State Lda
 
@@ -47,6 +52,9 @@ initState s = LdaState
     , _ndocs = 0
     , _pass = 0
     , _alpha = a
+    , _offset = offset s
+    , _decay = decay s
+    , _nupdate = 0
     } where
         e = V.replicate (nterms s) (eta s)
         a = V.replicate (ntopics s) (alpha s)
@@ -58,24 +66,54 @@ initLda s = Lda
     , _state = initState s
     }
 
-valFromState :: Lda -> Lda
-valFromState s = s
+-- Learning rate
+rho :: LdaState -> Double -> Double
+rho st cs = ((_offset st) + ps + (nupd / cs)) ** (-(_decay st)) :: Double
+    where
+        ps = fromIntegral (_pass st)
+        nupd = fromIntegral (_nupdate st)
+
+dirichletExpectation :: [Double] -> [Double]
+dirichletExpectation a = map (\x -> (psi x) - y) a
+    where
+        y = psi (sum a)
+
+inferenceStep :: [Int] -> [Double]
+inferenceStep d = [1.0, 4.5]
+    where
+        g = [0.5, 0.58, 0.34] --GENERATE
+        et = dirichletExpectation g
+        et' = map exp et
+
+inference :: [[Int]] -> (Matrix Double, Matrix Double)
+inference c = (M.zero 5 3, M.zero 5 3)
+
+eStep :: LdaState -> [[Int]] -> Matrix Double
+eStep st c = gamma
+    where
+        (gamma, sstate) = inference c
+
+--lambda :: LdaState -> Matrix Double
+--lambda st = (_eta st + _sstate st)
 
 updateStep :: [[Int]] -> Lda -> Lda
-updateStep c m = m { _state = newState }
+updateStep c m = m {_state = newState}
     where
-        os = (_state m)
-        s = _pass os
-        nd = (_ndocs os) + length(c)
-        newState = os {_pass = s, _ndocs = nd}
+        oldState = (_state m)
+        newPass = (_pass oldState) + 1
+        newState = oldState
+            { _pass = newPass
+            }
 
-stateStep :: [[Int]] -> LdaMonad Lda
-stateStep c = state (\st -> let st' = (updateStep c st) in (valFromState st', st'))
+updateState :: [[Int]] -> LdaMonad Lda
+updateState c = state (\st -> let st' = (updateStep c st) in (st', st'))
 
 -- Main loop
-update :: [[Int]] -> Int -> LdaMonad Lda
-update c n = do
-    s <- stateStep c
-    if ((iter (spec s) - 1) > n)
-        then do update c (n + 1)
-    else do return s
+update :: [[Int]] -> LdaMonad Lda
+update c = do
+    s <- updateState c
+    if ((passes (spec s)) > (_pass (_state s)))
+        then do 
+            update c
+    else do 
+        return s
