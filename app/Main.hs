@@ -4,6 +4,7 @@ import Control.Monad.State
 import Topics.Lda as Lda
 import Topics.Vocab
 
+
 main :: IO ()
 main = do
     let corpus = ["eat turkey on turkey day holiday",
@@ -19,9 +20,11 @@ main = do
     let vocab = buildVocab tokens
     let docs = prepareTokens vocab tokens
 
-    let specs = Lda.ldaSpecDefaults { ntopics = 2, nterms = numTerms vocab }
+    let specs = Lda.ldaSpecDefaults { ntopics = 2
+                                    , nterms = numTerms vocab
+                                    , passes = 1
+                                    }
 
     model <- Lda.initLda specs
 
     print (evalState (Lda.update docs) model)
-
