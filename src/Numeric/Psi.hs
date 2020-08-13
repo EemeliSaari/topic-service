@@ -1,15 +1,11 @@
 -- Code adopted from [scipy.special.psi](https://docs.scipy.org/doc/scipy/reference/generated/scipy.special.psi.html)
-module Stats.Psi
+
+module Numeric.Psi
 ( psi
-, solvePoly
-, 
+, psiAsy 
 ) where
 
-polyEval :: Double -> [Double] -> Int -> Double
-polyEval x coef n = solvePoly x (head coef) (tail coef) n 
-
-doubleFloor :: Double -> Double
-doubleFloor x = fromIntegral (floor x) :: Double
+import Numeric.Solve
 
 modf :: Double -> Double
 modf x = m * (x' - ip)
@@ -17,15 +13,6 @@ modf x = m * (x' - ip)
         x' = abs x
         m = if (x < 0) then -1.0 else 1.0
         ip = doubleFloor x'
-
-solvePoly :: Double -> Double -> [Double] -> Int -> Double
-solvePoly x y coef n
-        | n > 0 = solvePoly x ans coef' (n - 1)
-        | otherwise = ans
-    where
-        y' = if (null coef) then 0.0 else (head coef)
-        coef' = if (null coef) then coef else (tail coef)
-        ans = y * x + y'
 
 digamma12 :: Double -> Double
 digamma12 x = g * 0.99558162689208984 + g * r
