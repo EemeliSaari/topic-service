@@ -8,15 +8,20 @@ module Topics.Lda
 , Lda
 ) where
 
-import Control.Monad
-import System.Random.MWC
-import System.Random.MWC.Distributions (gamma)
+import Data.List (transpose)
 import Control.Monad.State
-import Data.Matrix as M
+import Data.Matrix as M hiding (transpose, trace)
+import Data.Vector as V (toList)
+--import Numeric.Limits (epsilon)
+import System.Random
+import Debug.Trace
 
-import Stats.Psi
+import Numeric.Psi
+import Numeric.Gamma
+import Numeric.Utils
 import Data.Defaults
-
+import Stats.Gamma
+import Topics.Vocab
 
 data LdaSpec a = LdaSpec 
     { ntopics :: !(Required a Int)
@@ -27,9 +32,9 @@ data LdaSpec a = LdaSpec
     , iter :: !Int
     , passes :: !Int
     , offset :: !Double
-    , seed :: !Int
+    , seed :: !(Maybe Int)
+    , convergence :: Double
     }
-
 
 ldaSpecDefaults :: LdaSpec Defaults
 ldaSpecDefaults = LdaSpec 
@@ -39,18 +44,18 @@ ldaSpecDefaults = LdaSpec
     -- Optimal parameters
     , alpha = Nothing
     , eta = Nothing
-    , decay = 0.1
-    , iter = 10
-    , passes = 5
+    , decay = 0.5
+    , iter = 100
+    , passes = 10
     , offset = 1
-    , seed = 42
+    , seed = Nothing
+    , convergence = 1E-3
     }
-
 
 data Lda = Lda
     { _eta :: [Double]
     , _alpha :: [Double]
-    , _sstate :: Matrix Double
+    , _sstats :: Matrix Double
     , _expElogBeta :: Matrix Double
     , _ndocs :: Int
     , _pass :: Int
@@ -59,8 +64,12 @@ data Lda = Lda
     , _numUpdate :: Int
     , _maxPasses :: Int
     , _numTopics :: Int
+    , _chunkSize :: Maybe Int
+    , _history :: [Double]
+    , _generator :: StdGen
+    , _convergence :: Double
+    , _maxIter :: Int
     } deriving (Show)
-
 
 type LdaState = State Lda
 
@@ -74,9 +83,12 @@ loadState p = do
 
 initLda :: LdaSpec Complete -> IO Lda
 initLda s = do
-    g <- createSystemRandom
-    st' <- replicateM n $ gamma 100 0.01 g
+    randomSeed <- randomIO
+    let g = mkStdGen randomSeed
+
+    let st' = take n (gammaSample 100 0.01 g)
     let eeb' = map exp x where x = dirichletExpectation st'
+
     return Lda
         { _eta = replicate (nterms s) (case (eta s) of
             Just x -> x
@@ -84,7 +96,7 @@ initLda s = do
         , _alpha = replicate (ntopics s) (case (alpha s) of
             Just x -> x
             Nothing -> auto)
-        , _sstate = M.fromList (ntopics s) (nterms s) st'
+        , _sstats = M.fromList (ntopics s) (nterms s) st'
         , _expElogBeta = M.fromList (ntopics s) (nterms s) eeb'
         , _ndocs = 0
         , _pass = 0
@@ -93,48 +105,201 @@ initLda s = do
         , _decay = decay s
         , _maxPasses = passes s
         , _numTopics = ntopics s
+        , _chunkSize = Nothing
+        , _history = []
+        , _generator = g
+        , _convergence = convergence s
+        , _maxIter = iter s
         } where
             n = (nterms s) * (ntopics s)
             auto = 1 / fromIntegral (ntopics s)
 
--- Learning rate
-rho :: Lda -> Double -> Double
-rho st cs = ((_offset st) + ps + (nupd / cs)) ** (-(_decay st)) :: Double
+genGamma :: Int -> Double -> Double -> LdaState [Double]
+genGamma n k t = do
+    model <- get
+    let g = _generator model
+        results = take n (gammaSample k t g)
+        (_, new) = next g
+    put model {_generator = new}
+    return results
+
+rho :: LdaState Double
+rho = do
+    s <- get
+    let offset' = (_offset s)
+        npasses' = fromIntegral (_pass s)
+        nupdate' = fromIntegral (_numUpdate s)
+        decay' = (_decay s)
+
+    let chunks = fromIntegral (case (_chunkSize s) of 
+                    Just 0 -> error "chunkSize must be larger than 0"
+                    Just x -> x
+                    Nothing -> error "No chunkSize set for LDA")
+    let res = (offset' + npasses' + nupdate'/chunks)**(-decay')
+    return res
+
+optimize :: Lda
+         -> [Double]
+         -> [Double]
+         -> [Double]
+         -> [[Double]]
+         -> Maybe [Double]
+         -> Int
+         -> ([Double], [[Double]])
+optimize model cts g et b p i
+        | converged || i >= (_maxIter model) = (g', (outerProduct et' tCnt)) 
+        | otherwise = optimize model cts g' et' b (Just newP) (i + 1)
     where
-        ps = fromIntegral (_pass st)
-        nupd = fromIntegral (_numUpdate st)
+        a = (_alpha model)
+        p' = case p of
+            Just x -> x
+            Nothing -> map (\y -> y + 0.000001) (vecMatDot et b)
+        tCnt = vecMatDot [x/y|(x, y) <- zip cts p'] (transpose b)
+        g' = [x + y*z|(x, y, z) <- zip3 a et tCnt]
+        et' = map exp (dirichletExpectation g')
+        newP =  map (\y -> y + 0.000001) (vecMatDot et' b)
+        converged = if i > 0 then diff g g' > (_convergence model) else False
 
-dirichletExpectation :: [Double] -> [Double]
-dirichletExpectation a = map (\x -> (psi x) - y) a
+inferenceStep :: Lda -> Matrix Double -> [(Int, Int)] -> ([Double], [[Double]])
+inferenceStep model et doc = optimize model counts gammad expElogT expElogB Nothing 0
     where
-        y = psi (sum a)
+        gammad = take (_numTopics model) (gammaSample 100 0.01 (_generator model))
+        elogT = dirichletExpectation gammad
+        expElogT = map exp elogT
+        ids = [x | (x, y) <- doc]
+        counts = [fromIntegral y | (x, y) <- doc]
+        expElogB = map (\i -> (transpose (M.toLists et))!!i) ids
+        alpha' = _alpha model
 
-inferenceStep :: [Int] -> [Double]
-inferenceStep d = [1.0, 4.5]
-    where
-        g = [0.5, 0.58, 0.34] --GENERATE
-        et = dirichletExpectation g
-        et' = map exp et
+--collectStats :: Ord a => [(a, Int)] -> [[Double]] -> LdaState (Matrix Double)
+--collectStats doc dsstats = do
+--    model <- get
+--    return (_sstats model)
 
-inference :: [[Int]] -> (Matrix Double, Matrix Double)
-inference c = (M.zero 5 3, M.zero 5 3)
+inference :: [[Int]] -> LdaState (Matrix Double, Matrix Double)
+inference c = do
+    model <- get
+    expElogB <- expElogBeta
+    let docs = map bow c
+        results = map (\d -> inferenceStep model expElogB d) docs
+        gammas = [x | (x, y) <- results]
+        org = (_sstats model)
+        -- Generator to slice correct term|topic results
+        docsstats = do
+            let m = M.ncols org
+                n = M.nrows org
+            --traceShowM docs
+            --traceShowM results
+            ((_, res), doc) <- zip results docs
+            rows <- [(zip x doc, i) | (x, i) <- zip res [0..]]
 
---lambda :: LdaState -> Matrix Double
---lambda st = (_eta st + _sstate st)
+            let (row, i) = rows
+                --filled = [if pos == idx then x else 0 | ((x, (idx, _)), pos) <- zip row [0..m]]
+            traceShowM row
+            traceShowM i
 
-updateStep :: Monad m => [[Int]] -> m Lda -> Lda
-updateStep c s = do
-    return s { _pass = newPass , _alpha = (_alpha s)} 
+            let row = [if p' == p then v else 0 | (v, (p, _)) <- row]
+            --let filled = 
+            traceShowM row
+            traceShowM row
+            --traceShowM i
+            --traceShowM y
+            --traceShowM rows
+            --traceShowM doc
+            --traceShowM rows
+
+            --    empty = take m (repeat 0)
+            --    mat = transpose [if i' == i then x else empty | i' <- [0..(n-1)]]
+            --traceShowM mat
+
+            return (M.setElem v (i, p) (M.zero n m))--(M.fromLists mat)
+
+    let ss' = docsstats
+    traceShowM (take 1 ss')
+    let sstats = foldl1 (+) ss'-- * expElogB
+    traceShowM sstats
+
+    return ((M.fromLists gammas), sstats)
+
+lambda :: LdaState (Matrix Double)
+lambda = do
+    s <- get
+    let eta' = (_eta s)
+    let sstate = (_sstats s)
+    return (colSum sstate eta' 0)
         where
-            newPass = (_pass s) + 1
+            colSum x v i
+                | i < (M.ncols x) = colSum x' v (i + 1)
+                | otherwise = x
+                where
+                    x' = M.mapCol (\_ y -> y + (v!!i)) i x
 
-updateState :: [[Int]] -> LdaState Lda
-updateState c = state (\st -> let st' = (updateStep c st) in (st', st'))
+elogBeta :: LdaState (Matrix Double)
+elogBeta = do
+    lmd <- lambda
+    return (M.fromLists (map dirichletExpectation (mats lmd)))
+        where
+            mats x = map (\i -> (V.toList (M.getRow i x))) [1..(M.nrows x)]
+
+expElogBeta :: LdaState (Matrix Double)
+expElogBeta = do
+    mat <- elogBeta
+    let n = M.nrows mat
+        m = M.ncols mat
+        new = M.fromList n m [exp x|x <- M.toList mat]
+    return new
+
+blend :: Matrix Double -> LdaState (Matrix Double)
+blend x = do
+    model <- get
+    lr <- rho
+ 
+    let sstats = (_sstats model)
+        n = M.nrows x
+        m = M.ncols x
+        scale = 1
+        op a b rho = a*((1 - rho)*scale) + (rho*scale*b)
+        new = (M.fromList n m [op x' y' lr|(x', y') <- zip (M.toList x) (M.toList sstats)])
+
+    put model {_sstats = new }
+
+    return new
+
+updateAlpha :: Matrix Double -> LdaState [Double]
+updateAlpha gam = do
+    s <- get
+    lr <- rho
+    let logphat = map (\x -> sum (dirichletExpectation (V.toList (M.getRow x gam)))/n) [1..(M.nrows gam)]
+    let alpha' = dirichletPrior (_alpha s) n logphat lr
+    return alpha'
+        where 
+            n = fromIntegral (M.nrows gam)
+
+updateState :: [[Int]] -> LdaState ()
+updateState c = do
+    model <- get
+    oldExpElog <- expElogBeta
+
+    put model { _chunkSize = Just (length c) }
+
+    (gammat, sstats) <- inference c
+    --traceShowM sstats
+    alp <- updateAlpha gammat
+    sstats' <- blend sstats
+    newExpElog <- expElogBeta
+
+    put model { _pass = (_pass model) + 1
+              , _alpha = alp
+              , _sstats = sstats'
+              , _history = (_history model) ++ [diff (M.toList oldExpElog) (M.toList newExpElog)]
+              , _chunkSize = Just (length c)
+              }
 
 -- Main loop
 update :: [[Int]] -> LdaState Lda
 update c = do
-    s <- updateState c
+    updateState c
+    s <- get
     if (_maxPasses s) > (_pass s)
         then do 
             update c
