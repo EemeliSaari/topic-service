@@ -176,6 +176,8 @@ inferenceStep model et doc = optimize model counts gammad expElogT expElogB Noth
 --    model <- get
 --    return (_sstats model)
 
+data Coordinate = Coordinate Double Int Int deriving (Show)
+
 inference :: [[Int]] -> LdaState (Matrix Double, Matrix Double)
 inference c = do
     model <- get
@@ -186,40 +188,27 @@ inference c = do
         org = (_sstats model)
         -- Generator to slice correct term|topic results
         docsstats = do
-            let m = M.ncols org
-                n = M.nrows org
-            --traceShowM docs
-            --traceShowM results
             ((_, res), doc) <- zip results docs
             rows <- [(zip x doc, i) | (x, i) <- zip res [0..]]
 
-            let (row, i) = rows
-                --filled = [if pos == idx then x else 0 | ((x, (idx, _)), pos) <- zip row [0..m]]
-            traceShowM row
-            traceShowM i
+            let (row, idx) = rows
+            (value, (idy, _)) <- row
 
-            let row = [if p' == p then v else 0 | (v, (p, _)) <- row]
-            --let filled = 
-            traceShowM row
-            traceShowM row
-            --traceShowM i
-            --traceShowM y
-            --traceShowM rows
-            --traceShowM doc
-            --traceShowM rows
+            return (Coordinate value idx idy)
 
-            --    empty = take m (repeat 0)
-            --    mat = transpose [if i' == i then x else empty | i' <- [0..(n-1)]]
-            --traceShowM mat
+    let sstats = foldl (coordSum) expElogB docsstats
 
-            return (M.setElem v (i, p) (M.zero n m))--(M.fromLists mat)
+    return ((M.fromLists gammas), expElogB)
 
-    let ss' = docsstats
-    traceShowM (take 1 ss')
-    let sstats = foldl1 (+) ss'-- * expElogB
-    traceShowM sstats
 
-    return ((M.fromLists gammas), sstats)
+coordSum :: Matrix Double -> Coordinate -> Matrix Double
+coordSum x (Coordinate v r c) = new
+    where
+        elem = (M.getElem r c x) + v
+        new = case (M.safeSet elem (r, c) x) of 
+            Just m -> m
+            Nothing -> x
+
 
 lambda :: LdaState (Matrix Double)
 lambda = do
@@ -285,7 +274,7 @@ updateState c = do
     (gammat, sstats) <- inference c
     --traceShowM sstats
     alp <- updateAlpha gammat
-    sstats' <- blend sstats
+    sstats' <- blend (sstats * oldExpElog)
     newExpElog <- expElogBeta
 
     put model { _pass = (_pass model) + 1
