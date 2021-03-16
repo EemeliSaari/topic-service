@@ -20,11 +20,10 @@ main = do
     let vocab = buildVocab tokens
     let docs = prepareTokens vocab tokens
 
-    let specs = Lda.ldaSpecDefaults { ntopics = 2
+    let specs = Lda.ldaSpecDefaults { ntopics = 3
                                     , nterms = numTerms vocab
-                                    , passes = 1
                                     }
 
     model <- Lda.initLda specs
 
-    print (evalState (Lda.update docs) model)
+    print (evalState (Lda.fit docs) model)
