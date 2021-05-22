@@ -34,7 +34,7 @@ psiAsy x
 -- Psi (digamma) function
 psi :: Double -> Double
 psi x
-        | x == 0 || r == 0 = error "Singular"
+        | x == 0 || r == 0 = error ("Singular: (x=" ++ show x ++ ", r=" ++ show r ++ ")")
         | x < 0 = solvePsi (1.0 - x) (-pi / (tan (pi * r)))
         | otherwise = solvePsi x 0.0
     where

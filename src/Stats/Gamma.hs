@@ -15,9 +15,9 @@ gammaSample k t g = [x*(main k g)**(1/k) | x <- randomRs (0, 1) g]
         inner v g' | flag = (inner z' newG)
                    | otherwise = d*v*t
                 where
-                    (u, g1) = randomR (0, 1) g'
-                    (z, g2) = randomR (0, 1) g1
-                    (_, newG) = next g2
+                    (u, g1) = random g'
+                    (z, g2) = random g1
+                    (newG, _) = split g2
                     z' | z > -1/c = (1 + c*z)**3
                        | otherwise = z
                     flag = log u > (0.5*z'**2 + d - d*v + d*log v)
@@ -25,4 +25,4 @@ gammaSample k t g = [x*(main k g)**(1/k) | x <- randomRs (0, 1) g]
         main k' g' | k' > 1 = d*(inner 0 newG)/t
                    | otherwise = main (k' + 1) newG
                 where
-                    (_, newG) = next g'
+                    (newG, _) = split g'
