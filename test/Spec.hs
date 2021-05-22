@@ -1,14 +1,15 @@
 module Main where
+
+import System.Exit (exitFailure)
 import Control.Monad.State
 
 import Topics.Lda as Lda
 import Topics.Vocab
 
-import Debug.Trace
 
-
-main :: IO ()
 main = do
+    putStrLn "This test always fails!"
+    --exitFailure
     let corpus = ["eat turkey on turkey day holiday",
                   "i like to eat cake on holiday",
                   "turkey trot race on thanksgiving holiday",
@@ -21,9 +22,8 @@ main = do
     let tokens = map words corpus --Should come pre-tokenized
     let vocab = buildVocab tokens
     let docs = prepareTokens vocab tokens
-    putStrLn ("nTerms: " ++ show (numTerms vocab))
 
-    let specs = Lda.ldaSpecDefaults { ntopics = 2
+    let specs = Lda.ldaSpecDefaults { ntopics = 3
                                     , nterms = numTerms vocab
                                     , passes = 10
                                     }
