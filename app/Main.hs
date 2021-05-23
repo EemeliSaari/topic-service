@@ -29,5 +29,5 @@ main = do
                                     }
 
     model <- Lda.initLda specs
-
-    print (evalState (Lda.fit docs) model)
+    result <- evalStateT (Lda.fit docs) model
+    print result

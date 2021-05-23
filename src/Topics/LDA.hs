@@ -8,18 +8,30 @@ module Topics.Lda
 , Lda
 ) where
 
-import Data.List as L
+import Data.List as L ( transpose )
 import Control.Monad.State
-import Data.Matrix as M hiding (trace)
-import System.Random
-import Debug.Trace
+    ( replicateM, MonadIO(liftIO), MonadState(put, get), StateT )
+import Data.Matrix as M
+    ( Matrix(..),
+      fromList,
+      getElem,
+      safeSet,
+      toList,
+      toLists,
+      transpose )
+--import System.Random
+import Debug.Trace ( traceM )
+import Data.Maybe ( fromMaybe )
+import Numeric.Utils ( diff, vecMatDot, outerProduct )
+import Numeric.Psi ( dirichletExpectation )
+import Data.Defaults ( Required, Purpose(Defaults, Complete) )
+import Topics.Vocab ( bow )
+import Statistics.Distribution.Gamma (gammaDistr)
+import Statistics.Distribution (genContVar)
+import System.Random.MWC ( asGenST, withSystemRandom )
 
-import Numeric.Utils
-import Data.Defaults
-import Stats.Gamma
-import Topics.Vocab
 
-data LdaSpec a = LdaSpec 
+data LdaSpec a = LdaSpec
     { ntopics :: !(Required a Int)
     , nterms :: !(Required a Int)
     , alpha :: !(Maybe Double)
@@ -34,7 +46,7 @@ data LdaSpec a = LdaSpec
     }
 
 ldaSpecDefaults :: LdaSpec 'Defaults
-ldaSpecDefaults = LdaSpec 
+ldaSpecDefaults = LdaSpec
     -- Required parameters
     { ntopics = ()
     , nterms = ()
@@ -66,37 +78,27 @@ data Lda = Lda
     , _convergence :: Double
     , _maxIter :: Int
     , _pass :: Int
-    , _generator :: StdGen
     } deriving (Show)
 
-type LdaState = State Lda
+type LdaState a = StateT Lda IO a
 
 data Coordinate = Coordinate Double Int Int deriving (Show)
 
 coordSum :: Matrix Double -> Coordinate -> Matrix Double
 coordSum x (Coordinate v r c) = new
     where
-        e = (M.getElem r c x) + v
-        new = case (M.safeSet e (r, c) x) of 
-            Just m -> m
-            Nothing -> x
+        e = M.getElem r c x + v
+        new = Data.Maybe.fromMaybe x (safeSet e (r, c) x)
 
 initLda :: LdaSpec 'Complete -> IO Lda
 initLda s = do
-    traceM $ "From init"
+    st' <- genGamma n 100 0.01
 
-    randomSeed <- randomIO
-    let g = mkStdGen randomSeed
-        st' = take n (gammaSample 100 0.01 g)
-        eeb' = map exp x where x = dirichletExpectation st'
+    let eeb' = map exp x where x = dirichletExpectation st'
 
     return Lda
-        { _eta = case (eta s) of
-            Just x -> x
-            Nothing -> auto
-        , _alpha = case (alpha s) of
-            Just x -> x
-            Nothing -> auto
+        { _eta = Data.Maybe.fromMaybe auto (eta s)
+        , _alpha = Data.Maybe.fromMaybe auto (alpha s)
         , _lambda = M.fromList (ntopics s) (nterms s) st'
         , _expElogBeta = M.fromList (ntopics s) (nterms s) eeb'
         , _ndocs = 0
@@ -107,12 +109,11 @@ initLda s = do
         , _k = ntopics s
         , _w = nterms s
         , _chunkSize = nchunks s
-        , _generator = g
         , _convergence = convergence s
         , _maxIter = iter s
         , _pass = 0
         } where
-            n = (nterms s) * (ntopics s)
+            n = nterms s * ntopics s
             auto = 1 / fromIntegral (ntopics s)
 
 elogBeta :: Matrix Double -> Matrix Double
@@ -129,24 +130,17 @@ expElogBeta mat = M.fromList n m eeb
         m = M.ncols mat
         eeb = map exp (M.toList (elogBeta mat))
 
-genGamma :: Int -> Double -> Double -> LdaState [Double]
+genGamma :: Int -> Double -> Double -> IO [Double]
 genGamma n k t = do
-    model <- get
-
-    let g = _generator model
-        results = take n (gammaSample k t g)
-        (new, _) = split g
-    put model {_generator = new}
-    traceM $ "generator: " ++ show new
-    return results
+    withSystemRandom . asGenST $ \g -> replicateM n $ genContVar (gammaDistr k t) g
 
 rho :: LdaState Double
 rho = do
     model <- get
-    let tau' = (_tau model)
+    let tau' = _tau model
         nupdate' = fromIntegral (_updated model)
-        kappa' = (_kappa model)
-        chunks = fromIntegral (_chunkSize model) 
+        kappa' = _kappa model
+        chunks = fromIntegral (_chunkSize model)
 
     return ((tau' + nupdate'/chunks)**(-kappa'))
 
@@ -159,18 +153,18 @@ optimize :: Lda
     -> Int -- Iterator count
     -> ([Double], [[Double]])
 optimize model cts g et b p i
-        | converged || i >= (_maxIter model) = (g', (outerProduct et' tCnt)) 
+        | converged || i >= _maxIter model = (g', outerProduct et' tCnt)
         | otherwise = optimize model cts g' et' b (Just newP) (i + 1)
     where
-        a = (_alpha model) 
+        a = _alpha model
         p' = case p of
             Just x -> x
-            Nothing -> map (\y -> y + 0.000001) (vecMatDot et b)
+            Nothing -> map (+ 0.000001) (vecMatDot et b)
         tCnt = vecMatDot [x/y|(x, y) <- zip cts p'] (L.transpose b)
         g' = [a + y*z|(y, z) <- zip et tCnt]
         et' = map exp (dirichletExpectation g')
-        newP =  map (\y -> y + 0.0000001) (vecMatDot et' b)
-        converged = if i > 0 then diff g g' > (_convergence model) else False
+        newP =  map (+ 0.0000001) (vecMatDot et' b)
+        converged = (i > 0) && (diff g g' > _convergence model)
 
 subStep :: Lda -> [Double] -> Matrix Double -> [(Int, Int)] -> ([Double], [[Double]])
 subStep model gammad et doc = optimize model counts gammad expElogT expElogB Nothing 0
@@ -179,7 +173,7 @@ subStep model gammad et doc = optimize model counts gammad expElogT expElogB Not
         expElogT = map exp elogT
         ids = [x | (x, _) <- doc]
         counts = [fromIntegral y | (_, y) <- doc]
-        expElogB = map (\i -> (M.toLists (M.transpose et))!!i) ids
+        expElogB = map (\i -> M.toLists (M.transpose et)!!i) ids
 
 -- Training iteration
 updateLambda :: [[Int]] -> LdaState ()-- Lda
@@ -187,10 +181,10 @@ updateLambda c = do
     model <- get
 
     let topics = _k model
-        batch = (length c)
+        batch = length c
         expElogB = expElogBeta (_lambda model)
 
-    gamma <- genGamma (batch*topics) 100 0.01
+    gamma <- liftIO $ genGamma (batch*topics) 100 0.01
 
     let docs = map bow c
         results = [subStep model (slice i gamma) expElogB d | (d, i) <- zip docs [0..]]
@@ -198,7 +192,7 @@ updateLambda c = do
                 slice :: Int -> [Double] -> [Double]
                 slice idx mat
                     | idx >= from + topics = error "NOOOO"
-                    | from+topics-1 >= length mat = error ("NEEEEJ " ++ show idx ++ ", " ++ show mat ++ ", " ++ show topics ++ ", " ++ show from ++ ", " ++ show docs) 
+                    | from+topics-1 >= length mat = error ("NEEEEJ " ++ show idx ++ ", " ++ show mat ++ ", " ++ show topics ++ ", " ++ show from ++ ", " ++ show docs)
                     | otherwise = [mat!!i | i <- [from..(from+topics-1)]]
                     where
                         from = idx*topics
@@ -211,31 +205,30 @@ updateLambda c = do
             (value, (idy, _)) <- row
             return (Coordinate value idx idy)
 
-    let res' = foldl (coordSum) expElogB docsstats
+    let res' = foldl coordSum expElogB docsstats
         sstats' = [x*y | (x, y) <- zip (M.toList res') (M.toList expElogB)]
         sstats = M.fromList (M.nrows res') (M.ncols res') sstats'
 
     rhot <- rho
-    traceM $ show sstats
+    traceM $ "sstats: " ++ show sstats
     let oldLambda = _lambda model
         eta' = _eta model
         n = fromIntegral (length c)
 
     let a = [x*(1-rhot) + rhot*(eta'+100.0*y/n) | (x, y) <- zip (M.toList oldLambda) (M.toList sstats)]
-        newLambda = M.fromList (M.nrows sstats) (M.ncols sstats) a 
+        newLambda = M.fromList (M.nrows sstats) (M.ncols sstats) a
 
     put model { _lambda = newLambda }
-
 
 -- Main training loop
 fit :: [[Int]] -> LdaState Lda
 fit c = do
     updateLambda c
     model <- get
-    put model { _pass = ((_pass model) + 1) }
-    traceM $ show model
-    if (_maxPasses model) > (_pass model)
-        then do 
+    put model { _pass = _pass model + 1 }
+    --traceM $ show model
+    if _maxPasses model > _pass model
+        then
             fit c
-    else do 
+    else
         return model
