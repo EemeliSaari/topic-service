@@ -21,7 +21,6 @@ library
     Numeric.Zeta
     Numeric.Utils
     Data.Defaults
-    Stats.Gamma
   build-depends:
     base >=4.12.0.0,
     mtl >= 2.2,
@@ -33,6 +32,7 @@ library
     random >= 1.2.0,
     loch-th >= 0.2.2,
     splitmix >= 0.1.0.3,
+    statistics >= 0.15.2.0
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options: -Wall
@@ -43,20 +43,25 @@ executable topic-server
     base >= 4.12.0.0,
     random >= 1.2.0,
     mtl >= 2.2,
-    --loch-th >=0.2.2,
-    --matrix >=0.3.6.1,
-    --mwc-random >=0.14.0.0,
-    --random >=1.2.0,
-    --vector >=0.12.0.3,
     topic-service
   hs-source-dirs:      app
   default-language:    Haskell2010
 
-test-suite spec
+test-suite tests
   type:                exitcode-stdio-1.0
-  hs-source-dirs:      test
-  main-is:             Spec.hs
+  hs-source-dirs:      tests
+  main-is:             Tests.hs
+  other-modules:
+    Tests.Gamma
+    Tests.Psi
+    Tests.Solve
+    Tests.Zeta
   build-depends:
     base >=4.12.0.0,
+    QuickCheck >= 2.7.5,
+    tasty,
+    tasty-hunit,
+    tasty-quickcheck,
+    tasty-expected-failure,
     topic-service
   default-language:    Haskell2010
