@@ -6,19 +6,19 @@ module Numeric.Gamma
 , stirf
 ) where
 
-import Numeric.Zeta
-import Numeric.Solve
+import Numeric.Zeta ( zetaf )
+import Numeric.Solve ( doubleFloor, polyEval )
 
 polygamma :: Int -> Double -> Double
-polygamma n x = ((-1) ** nn) * (gammaf nn) * (zetaf nn x)
+polygamma n x = ((-1) ** nn) * gammaf nn * zetaf nn x
     where
         nn = fromIntegral (n + 1)
 
 stirf :: Double -> Double
-stirf x = y*2.50662827463100050242E0*w
+stirf x = y*2.50662827463100050242*w
     where
-        w = 1 + 1/x * (polyEval (1/x) coefS 4) 
-        y | x > 143.016 = v*(v/exp x)
+        w = 1 + 1/x * polyEval (1/x) coefS 4
+        y | x > 143.01608 = v*(v/exp x)
           | otherwise = x**(x - 0.5)/exp x
             where
                 v = x**(0.5 * x - 0.25)
@@ -31,7 +31,7 @@ gammaf x
         q = abs x
         solveLarge x'
             | x' < 0 && p == q = error "Overflow"
-            | otherwise = gamSign * (solveSubZ (q - p))
+            | otherwise = gamSign * solveSubZ (q - p)
             where
                 p = doubleFloor q
                 gamSign | even (toInteger (floor q)) = -1

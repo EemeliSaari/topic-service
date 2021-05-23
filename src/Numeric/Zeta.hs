@@ -8,28 +8,28 @@ import Numeric.Solve
 
 zetaf :: Double -> Double -> Double
 zetaf x q 
-        | x <= 1 = error ("Invalid x " ++ (show x))
-        | q <= 0 && q == doubleFloor q = error ("Invalid q " ++ (show q))
+        | x <= 1 = error ("Invalid x " ++ show x)
+        | q <= 0 && q == doubleFloor q = error ("Invalid q " ++ show q)
         | q > 1E8 = (1/(x - 1) + 1/(2*q)) * q**(1 - x)
         | otherwise = mainLoop (q**(-x)) q 0 0.0
     where
         secondLoop s a i b w k
-            | t < machep = s
-            | i >= 12 = s
+            | abs (t'/s) < machep = s
+            | i == 12 = s
             | otherwise = secondLoop s' (a'*(x + k')) (i + 1) (b'/w) w (k'+1)
             where
                 a' = a*(x + k)
                 b' = b/w
-                t' = a*b/(coefA!!i)
-                s' = s + t
-                t = abs (t'/s)
+                t' = a'*b'/(coefA!!i)
+                s' = s + t'
                 k' = k + 1
         mainLoop s a i b
-            | i < 9 || a <= 9 = mainLoop (s + b') (a + 1) (i + 1) b'
+            | i < 9 || a <= 9 = mainLoop (s + b') a' (i + 1) b'
             | abs (b/s) < machep = s
             | otherwise = secondLoop (s + b*a/(x - 1) - 0.5*b) 1 0 b a 0
             where
-                b' = (a + 1)**(-x)
+                a' = a + 1
+                b' = a'**(-x)
 
 machep :: Double
 machep = 1.11022302462515654042E-16

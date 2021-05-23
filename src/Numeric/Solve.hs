@@ -14,9 +14,9 @@ solvePoly x y coef n
         | n > 0 = solvePoly x ans coef' (n - 1)
         | otherwise = ans
     where
-        y' = if (null coef) then 0.0 else (head coef)
-        coef' = if (null coef) then coef else (tail coef)
+        y' = if null coef then 0.0 else head coef
+        coef' = if null coef then coef else tail coef
         ans = y * x + y'
 
 polyEval :: Double -> [Double] -> Int -> Double
-polyEval x coef n = solvePoly x (head coef) (tail coef) n 
+polyEval x coef = solvePoly x (head coef) (tail coef)
