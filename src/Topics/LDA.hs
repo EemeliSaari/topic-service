@@ -54,7 +54,7 @@ ldaSpecDefaults = LdaSpec
     , alpha = Nothing
     , eta = Nothing
     , tau = 0.5
-    , kappa = 1
+    , kappa = 0.5
     , iter = 100
     , passes = 1
     , seed = Nothing
@@ -93,7 +93,6 @@ coordSum x (Coordinate v r c) = new
 initLda :: LdaSpec 'Complete -> IO Lda
 initLda s = do
     st' <- genGamma n 100 0.01
-
     let eeb' = map exp x where x = dirichletExpectation st'
 
     return Lda
@@ -141,7 +140,6 @@ rho = do
         nupdate' = fromIntegral (_updated model)
         kappa' = _kappa model
         chunks = fromIntegral (_chunkSize model)
-
     return ((tau' + nupdate'/chunks)**(-kappa'))
 
 optimize :: Lda
@@ -159,11 +157,11 @@ optimize model cts g et b p i
         a = _alpha model
         p' = case p of
             Just x -> x
-            Nothing -> map (+ 0.000001) (vecMatDot et b)
+            Nothing -> map (+ 1E-100) (vecMatDot et b)
         tCnt = vecMatDot [x/y|(x, y) <- zip cts p'] (L.transpose b)
         g' = [a + y*z|(y, z) <- zip et tCnt]
         et' = map exp (dirichletExpectation g')
-        newP =  map (+ 0.0000001) (vecMatDot et' b)
+        newP =  map (+1E-100) (vecMatDot et' b)
         converged = (i > 0) && (diff g g' > _convergence model)
 
 subStep :: Lda -> [Double] -> Matrix Double -> [(Int, Int)] -> ([Double], [[Double]])
@@ -210,12 +208,14 @@ updateLambda c = do
         sstats = M.fromList (M.nrows res') (M.ncols res') sstats'
 
     rhot <- rho
+    traceM $ "rho: " ++ show rhot
     traceM $ "sstats: " ++ show sstats
     let oldLambda = _lambda model
         eta' = _eta model
         n = fromIntegral (length c)
+        terms' = fromIntegral (_w model)
 
-    let a = [x*(1-rhot) + rhot*(eta'+100.0*y/n) | (x, y) <- zip (M.toList oldLambda) (M.toList sstats)]
+    let a = [x*(1-rhot) + rhot*(eta'+terms'*y/n) | (x, y) <- zip (M.toList oldLambda) (M.toList sstats)]
         newLambda = M.fromList (M.nrows sstats) (M.ncols sstats) a
 
     put model { _lambda = newLambda }
@@ -225,7 +225,7 @@ fit :: [[Int]] -> LdaState Lda
 fit c = do
     updateLambda c
     model <- get
-    put model { _pass = _pass model + 1 }
+    put model { _pass = _pass model + 1, _updated = _updated model + 1}
     --traceM $ show model
     if _maxPasses model > _pass model
         then
